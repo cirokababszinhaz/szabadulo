@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="hu">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b1d3a">
+<title>Ciróka Admin Vezérlőpult</title>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>
+:root{--bg:#0b1d3a;--card:#13294f;--ink:#f4f1ea;--mut:#9fb0cc;--gold:#ffc94d;--ok:#3ddc84;--bad:#ff6b6b;--warn:#ff922b}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;color:var(--ink);background:radial-gradient(circle at 50% -10%,#1d3f7a,#0b1d3a 60%);font:16px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+#app{max-width:1120px;margin:0 auto;padding:16px 16px 60px}
+.card{background:var(--card);border:1px solid #ffffff18;border-radius:18px;padding:18px;margin:12px 0;box-shadow:0 8px 24px #0006}
+h1{font-size:24px;margin:4px 0}h2{font-size:18px;margin:0 0 8px}h3{font-size:16px;margin:6px 0}
+.small{color:var(--mut);font-size:13px}.center{text-align:center}
+button,.btn{display:inline-block;padding:10px 14px;border:0;border-radius:12px;background:var(--gold);color:#1b1b1b;font:700 14px inherit;cursor:pointer;text-align:center}
+button.ghost{background:#ffffff14;color:var(--ink);border:1px solid #ffffff30}
+button.warn{background:var(--warn);color:#1b1b1b}
+button.danger{background:var(--bad);color:#fff}
+button.sm{padding:7px 11px;font-size:13px;margin:4px 4px 0 0}
+input,select,textarea{width:100%;padding:11px;border-radius:10px;border:1px solid #ffffff30;background:#0b1d3a;color:var(--ink);font:15px inherit;margin-top:6px}
+textarea{min-height:120px;font:13px/1.4 ui-monospace,Menlo,monospace}
+.prog{height:8px;border-radius:99px;background:#ffffff18;overflow:hidden}
+.prog>i{display:block;height:100%;background:var(--gold);transition:width .5s}
+.chip{display:inline-block;padding:4px 12px;border-radius:99px;color:#fff;font-weight:700;font-size:13px}
+.row{display:flex;gap:10px;align-items:center;justify-content:space-between}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
+.thumb{width:100%;border-radius:12px;display:block;cursor:zoom-in;object-fit:cover;max-height:260px}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0}.tabs button{background:#ffffff14;color:var(--ink);margin:0}
+.tabs button.on{background:var(--gold);color:#1b1b1b}
+#overlay{position:fixed;inset:0;background:#000e;z-index:100;display:none;align-items:center;justify-content:center;flex-direction:column;padding:16px}
+#overlay img{max-width:90%;max-height:80vh;border-radius:14px}
+#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#000d;color:#fff;padding:12px 20px;border-radius:14px;z-index:120;display:none}
+.sosbox{background:#ff6b6b22;border:1px solid var(--bad);padding:12px;border-radius:12px;margin:8px 0}
+.sos-badge{background:var(--bad);color:#fff;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:700;animation:pulse 1s infinite}
+@keyframes pulse{0%{opacity:1}50%{opacity:.4}100%{opacity:1}}
+.qrbox{display:inline-block;background:#fff;padding:8px;border-radius:8px;margin:6px}
+.qrcell{text-align:center;color:#000;background:#fff;border-radius:10px;padding:10px;font-size:13px}
+@media print{.noprint{display:none!important}body{background:#fff;color:#000}.card{border:1px solid #aaa;background:#fff}.qrcell{page-break-inside:avoid}}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="overlay"></div>
+<div id="toast"></div>
+
+<script>
+const firebaseConfig = {
+  apiKey: "AIzaSyB_OyqkVCXsx2fLy1qdjQ2i9D-0KCMs0IY",
+  authDomain: "cirokaszabadulo.firebaseapp.com",
+  databaseURL: "https://cirokaszabadulo-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "cirokaszabadulo",
+  storageBucket: "cirokaszabadulo.firebasestorage.app",
+  messagingSenderId: "361410869966",
+  appId: "1:361410869966:web:3017e75f2d6c499539ee9f",
+  measurementId: "G-TM4ERQKV4H"
+};
+
+const ADMIN_PIN = 'ciroka2026';
+const DEFAULT_RADIUS = 5;
+const POINTS_PER_STEP = 100;
+const TEAM_KEYS = ['red', 'green', 'blue'];
+const DEFAULT_TEAMS = {
+  red:   {name: 'Manók',         color: '#e5383b'},
+  green: {name: 'Rénszarvasok',  color: '#2d9d5b'},
+  blue:  {name: 'Hóemberek',     color: '#3a86ff'}
+};
+const FINALS = {
+  lego:   {icon: '🧱🎄', title: 'LEGO-fenyő',      desc: 'Építsetek karácsonyfát LEGO-ból!'},
+  gyurma: {icon: '🐑⭐', title: 'Gyurma-betlehem', desc: 'Alkossatok betlehemi jelenetet gyurmából!'},
+  szinezo:{icon: '🎅🖍️', title: 'Mikulás-színező', desc: 'Színezzétek ki a legszebb rajzot!'}
+};
+
+firebase.initializeApp(firebaseConfig);
+const rtdb = firebase.database();
+
+const DB = {
+  watch: (p, cb) => {
+    const ref = rtdb.ref(p);
+    ref.on('value', snap => cb(snap.exists() ? snap.val() : null), err => console.error("RTDB watch hiba:", err));
+    return () => ref.off();
+  },
+  watchCol: (p, cb) => {
+    const ref = rtdb.ref(p);
+    ref.on('value', snap => {
+      const val = snap.val();
+      if (!val) return cb([]);
+      const list = Object.entries(val).map(([id, data]) => ({id, ...(typeof data === 'object' ? data : {val: data})}));
+      cb(list);
+    }, err => console.error("RTDB watchCol hiba:", err));
+    return () => ref.off();
+  },
+  get: async p => {
+    const snap = await rtdb.ref(p).once('value');
+    return snap.exists() ? snap.val() : null;
+  },
+  set: async (p, d, merge = true) => {
+    if (merge) return rtdb.ref(p).update(d);
+    return rtdb.ref(p).set(d);
+  },
+  del: async p => rtdb.ref(p).remove()
+};
+
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const now = () => Date.now();
+
+let remote = {}, cfg = {teams: DEFAULT_TEAMS, finals: {red:'lego',green:'gyurma',blue:'szinezo'}, locs: {}, content: {routes:{red:[],green:[],blue:[]}}, closed: false};
+function build() {
+  cfg.teams = {...DEFAULT_TEAMS, ...(remote.teams || {})};
+  cfg.finals = {...{red:'lego',green:'gyurma',blue:'szinezo'}, ...(remote.finals || {})};
+  cfg.locs = remote.locs || {};
+  cfg.closed = !!remote.closed;
+  if (remote.contentJson) {
+    try { const c = JSON.parse(remote.contentJson); if (c && c.routes) cfg.content = c; } catch(e){}
+  }
+}
+
+function toast(m) {
+  const t = $('#toast'); t.textContent = m; t.style.display = 'block';
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.style.display = 'none', 2800);
+}
+function overlay(html) { const o = $('#overlay'); o.innerHTML = html; o.style.display = 'flex'; }
+function closeOverlay() { $('#overlay').style.display = 'none'; $('#overlay').innerHTML = ''; }
+
+let teams = {}, subs = [], tab = 'live';
+const stepsOf = k => (cfg.content.routes && cfg.content.routes[k]) || [];
+const locOf = s => s.loc || s.id;
+const ago = ts => { if (!ts) return '–'; const s = Math.round((now() - ts) / 1000); return s < 60 ? s + ' mp' : Math.round(s / 60) + ' p'; };
+const chip = k => `<span class="chip" style="background:${(cfg.teams[k]||{}).color||'#888'}">${esc((cfg.teams[k]||{}).name||k)}</span>`;
+
+const TABS = [
+  ['live', '📡 Élő monitoring'],
+  ['proj', '📽️ Kivetítő / Ranglista'],
+  ['subs', '🖼️ Beadványok'],
+  ['edit', '🛠️ Küldetésszerkesztő'],
+  ['locs', '📍 Helyszínek & GPS'],
+  ['qr', '🔳 QR kódok nyomtatása'],
+  ['set', '⚙️ Beállítások']
+];
+
+function frame() {
+  $('#app').innerHTML = `<div class="noprint">
+    <div class="row">
+      <h1>🎛️ Ciróka Rescue Control</h1>
+      <div><button class="${cfg.closed ? 'warn' : 'ghost'}" data-a="close">${cfg.closed ? '▶️ Küldetés megnyitása' : '⏹ Küldetés lezárása'}</button></div>
+    </div>
+    <div class="tabs">${TABS.map(([k, n]) => `<button data-tab="${k}" class="${k === tab ? 'on' : ''}">${n}</button>`).join('')}</div>
+  </div><div id="pane"></div>`;
+}
+
+function draw(force) {
+  if (!$('#pane')) frame();
+  if (!force && tab !== 'live' && tab !== 'subs' && tab !== 'proj') return;
+  const views = {live: liveHTML, proj: projHTML, subs: subsHTML, edit: editHTML, locs: locsHTML, qr: qrHTML, set: setHTML};
+  $('#pane').innerHTML = (views[tab] || liveHTML)();
+  if (tab === 'qr') drawQR();
+}
+
+function liveHTML() {
+  return TEAM_KEYS.map(k => {
+    const d = teams[k], st = stepsOf(k), t = cfg.teams[k] || {name: k, color: '#999'};
+    if (!d) return `<div class="card"><div class="row">${chip(k)}<span class="small">Még senki nem lépett be ezzel a csapattal</span></div></div>`;
+    const total = st.length + 1, dn = d.phase === 'done' ? total : Math.min(d.step, st.length), pct = Math.round(dn / total * 100);
+    const s = st[d.step];
+    const where = d.phase === 'done' ? '🎉 KÉSZ, MEGOLDVA' : d.phase === 'final' ? '🎨 Döntő feladat: ' + ((FINALS[cfg.finals[k]] || {}).title || '') + (d.finalStart ? ' (fut az idő!)' : '') : (s ? esc(s.name) + (d.phase === 'go' ? ' – úton a célhoz' : ' – feladaton dolgoznak') : '');
+    const gps = d.phase === 'go' && d.dist != null ? `📍 ${Math.round(d.dist)} m a céltól (±${d.acc ?? '?'} m)` : '';
+    const age = Math.round((now() - d.lastSeen) / 1000), on = age < 20;
+
+    let sosBlock = '';
+    if (d.sosActive) {
+      sosBlock = `<div class="sosbox">
+        <div class="row"><span class="sos-badge">🆘 SEGÍTSÉGKÉRÉS</span><span class="small">${ago(d.sosTime)}</span></div>
+        <div style="font-size:15px;margin:6px 0"><b>Kérdésük:</b> "${esc(d.sosMsg)}"</div>
+        <div class="row">
+          <input type="text" id="rep_${k}" placeholder="Írj választ a csapatnak…" style="margin:0">
+          <button class="sm" data-a="sendsos" data-k="${k}" style="width:auto">Válasz küldése</button>
+        </div>
+      </div>`;
+    }
+
+    return `<div class="card">
+      <div class="row">${chip(k)}<strong style="font-size:26px">${pct}%</strong></div>
+      <div class="prog" style="margin:10px 0"><i style="width:${pct}%"></i></div>
+      <div style="font-size:17px"><b>${where}</b></div>
+      <div class="small" style="margin:4px 0">${gps} ${gps ? '·' : ''} ${on ? '🟢 Online' : '🔴 Nem elérhető (' + ago(d.lastSeen) + ')'} · Utolsó aktivitás: ${ago(d.lastActive)} · ⭐ <b>${d.points || 0} pont</b></div>
+      ${sosBlock}
+      <div style="margin-top:10px">
+        <button class="sm" data-a="skip" data-k="${k}">⏭ Továbbenged</button>
+        <button class="sm ghost" data-a="back" data-k="${k}">⏮ Vissza 1-gyel</button>
+        <button class="sm ghost" data-a="pp" data-k="${k}">+50 ⭐</button>
+        <button class="sm ghost" data-a="pm" data-k="${k}">−50 ⭐</button>
+        <button class="sm ghost" data-a="reset" data-k="${k}">🔄 Csapat újraindítása</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function projHTML() {
+  const sorted = [...TEAM_KEYS].map(k => ({k, d: teams[k] || {points: 0, step: 0}})).sort((a,b) => (b.d.points||0) - (a.d.points||0));
+  return `<div class="card center" style="background:#0b1d3a;border:2px solid var(--gold)">
+    <div class="eyebrow">KÖZÖS EREDMÉNYHIRDETŐ & VETÍTŐ</div>
+    <h1 style="font-size:32px">🏆 Karácsonyi Ranglista</h1>
+    <div style="display:flex;gap:16px;justify-content:center;flex-wrap:wrap;margin:20px 0">
+      ${sorted.map((item, idx) => {
+        const t = cfg.teams[item.k];
+        return `<div style="background:${t.color};color:#fff;padding:18px 28px;border-radius:18px;min-width:200px">
+          <div style="font-size:36px;font-weight:900">#${idx+1}</div>
+          <div style="font-size:22px;font-weight:700">${esc(t.name)}</div>
+          <div style="font-size:26px;font-weight:900;margin-top:8px">⭐ ${item.d.points || 0} pont</div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>
+  <h2>📸 Beküldött fotók és dalok közös visszajátszása</h2>
+  ${subsHTML()}`;
+}
+
+function subsHTML() {
+  if (!subs.length) return '<div class="card small">Még nem érkezett beadvány.</div>';
+  return '<div class="grid">' + subs.map(x => {
+    const k = x.team;
+    const body = x.type === 'photo' || x.type === 'final' ? `<img class="thumb" data-big="1" src="${x.data}">` :
+                 x.type === 'sing' ? `<audio controls preload="none" src="${x.data}" style="width:100%"></audio>` :
+                 `<div style="font-size:18px;font-weight:700;color:var(--gold);padding:6px 0">${esc(x.answer)}</div>`;
+    return `<div class="card" style="margin:0">
+      <div class="row">${chip(k)} <span class="small">${esc(x.stepName)} · ${new Date(x.ts).toLocaleTimeString('hu')}</span></div>
+      <div style="margin-top:10px">${body}</div>
+    </div>`;
+  }).join('') + '</div>';
+}
+
+function editHTML() {
+  return `<div class="card">
+    <div class="row">
+      <h2>🛠️ Állomások és feladatok szerkesztése</h2>
+      <button class="sm" data-a="addstep">+ Új állomás hozzáadása</button>
+    </div>
+    <p class="small">Itt bármikor szabadon átírhatod az állomásokat, emojikat, feladatokat, válaszokat és a pontokat jövőre is!</p>
+    ${TEAM_KEYS.map(k => `
+      <div style="border-top:2px solid #ffffff20;padding-top:14px;margin-top:16px">
+        <h3>${chip(k)} útvonala:</h3>
+        ${stepsOf(k).map((s, idx) => `
+          <div class="card" style="background:#0f2243;border:1px solid #ffffff24">
+            <div class="row">
+              <b>#${idx+1}. Állomás [ID: ${esc(s.id)}]</b>
+              <button class="sm danger" data-a="delstep" data-k="${k}" data-idx="${idx}">Törlés</button>
+            </div>
+            <div class="grid" style="margin-top:8px">
+              <div><label class="small">Állomás neve:</label><input value="${esc(s.name)}" data-fld="name" data-k="${k}" data-idx="${idx}"></div>
+              <div><label class="small">Emoji nyom:</label><input value="${esc(s.clue)}" data-fld="clue" data-k="${k}" data-idx="${idx}"></div>
+              <div><label class="small">Típus:</label>
+                <select data-fld="type" data-k="${k}" data-idx="${idx}">
+                  <option value="photo" ${s.type==='photo'?'selected':''}>Fotózás</option>
+                  <option value="count" ${s.type==='count'?'selected':''}>Számolás</option>
+                  <option value="text" ${s.type==='text'?'selected':''}>Kérdés / Szöveg</option>
+                  <option value="sing" ${s.type==='sing'?'selected':''}>Éneklés (hang)</option>
+                  <option value="qr" ${s.type==='qr'?'selected':''}>QR keresés</option>
+                </select>
+              </div>
+              <div><label class="small">Pontérték (⭐):</label><input type="number" value="${s.points || POINTS_PER_STEP}" data-fld="points" data-k="${k}" data-idx="${idx}"></div>
+            </div>
+            <div style="margin-top:8px"><label class="small">Feladat instrukció / Kérdés:</label><input value="${esc(s.prompt)}" data-fld="prompt" data-k="${k}" data-idx="${idx}"></div>
+            <div class="grid" style="margin-top:8px">
+              <div><label class="small">Helyes válasz (| elválasztva több is jó):</label><input value="${esc(s.answer||'')}" data-fld="answer" data-k="${k}" data-idx="${idx}"></div>
+              <div><label class="small">Feladat QR kód (ha QR típus):</label><input value="${esc(s.qr||'')}" data-fld="qr" data-k="${k}" data-idx="${idx}"></div>
+            </div>
+            <div style="margin-top:8px"><label class="small">💡 Megvásárolható tipp:</label><input value="${esc(s.hint||'')}" data-fld="hint" data-k="${k}" data-idx="${idx}"></div>
+          </div>
+        `).join('')}
+      </div>
+    `).join('')}
+    <button class="sm" data-a="saveeditor" style="margin-top:14px;font-size:16px">💾 Állomások mentése</button>
+  </div>`;
+}
+
+function allLocs() {
+  const m = {};
+  TEAM_KEYS.forEach(k => stepsOf(k).forEach(s => { const l = locOf(s); if (!m[l]) m[l] = {loc: l, name: s.name, team: k}; }));
+  return Object.values(m);
+}
+
+function locsHTML() {
+  return `<div class="card small">
+    Állj a kívánt helyszínre a színházban, majd nyomd meg a „📍 Rögzítés itt” gombot (6 mp-ig méri a legpontosabb mintát).
+  </div>` +
+  allLocs().map(o => {
+    const L = cfg.locs[o.loc];
+    return `<div class="card">
+      <div class="row">${chip(o.team)}<b>${esc(o.name)}</b></div>
+      <div class="small">${L ? `✅ Rögzítve: lat ${L.lat.toFixed(5)}, lng ${L.lng.toFixed(5)} (±${L.acc ?? '?'} m)` : '❌ Nincs még GPS pozíció'} · Kulcs: <code>ciroka:${esc(o.loc)}</code></div>
+      <div class="row" style="margin-top:8px">
+        <span class="small">Sugár (m):</span>
+        <input type="number" min="1" step="0.5" value="${(L && L.r) || DEFAULT_RADIUS}" data-r="${o.loc}" style="width:90px;margin:0">
+      </div>
+      <button class="sm" data-a="rec" data-l="${o.loc}">📍 Rögzítés itt</button>
+      ${L ? `<button class="sm ghost" data-a="clr" data-l="${o.loc}">Törlés</button>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function qrItems() {
+  const a = allLocs().map(o => ({label: 'Helyszín-QR: ' + o.name, text: 'ciroka:' + o.loc, team: o.team}));
+  TEAM_KEYS.forEach(k => stepsOf(k).filter(s => s.type === 'qr' && s.qr).forEach(s => a.push({label: 'Feladat-QR: ' + s.name, text: s.qr, team: k})));
+  return a;
+}
+function qrHTML() {
+  return `<div class="noprint"><button class="sm" onclick="print()">🖨️ QR-kódok nyomtatása</button></div>
+  <div class="grid" style="margin-top:14px">` +
+  qrItems().map((q, i) => `<div class="qrcell"><div id="qr${i}" class="qrbox"></div><div><b>${esc(q.label)}</b></div><div class="small">${esc(cfg.teams[q.team].name)}</div><div style="font-size:10px;color:#666">${esc(q.text)}</div></div>`).join('') +
+  '</div>';
+}
+function drawQR() { qrItems().forEach((q, i) => { const e = $('#qr' + i); if (e && window.QRCode) new QRCode(e, {text: q.text, width: 140, height: 140}); }); }
+
+function setHTML() {
+  return `<div class="card">
+    <h2>Csapatok testreszabása</h2>
+    ${TEAM_KEYS.map(k => `
+      <div style="margin-bottom:14px">
+        <div class="row">
+          <input data-n="${k}" value="${esc(cfg.teams[k].name)}" style="margin:0">
+          <input type="color" data-c="${k}" value="${cfg.teams[k].color}" style="width:60px;margin:0;padding:2px;height:46px">
+        </div>
+        <label class="small">Kézműves döntő feladat ehhez a csapathoz:</label>
+        <select data-f="${k}">
+          ${Object.entries(FINALS).map(([id, f]) => `<option value="${id}" ${cfg.finals[k] === id ? 'selected' : ''}>${f.title} (${f.desc})</option>`).join('')}
+        </select>
+      </div>
+    `).join('')}
+  </div>
+  <div class="card">
+    <h2>Biztonsági JSON mentés / export</h2>
+    <textarea id="cj">${esc(JSON.stringify(cfg.content, null, 2))}</textarea>
+    <button class="sm" data-a="savejson">💾 Mentés</button>
+  </div>
+  <div class="card">
+    <h2>Veszélyzóna</h2>
+    <button class="sm danger" data-a="wipe">🗑 Összes csapat és beadvány törlése (Tiszta lap a buli előtt)</button>
+  </div>`;
+}
+
+const advance = async (k, delta) => {
+  const d = teams[k]; if (!d) return;
+  const n = Math.max(0, (d.step || 0) + delta), len = stepsOf(k).length;
+  await DB.set('teams/' + k, {step: n, phase: n >= len ? 'final' : 'go', finalStart: null, sosReply: '', lastActive: now()});
+};
+
+function recordLoc(l) {
+  if (!navigator.geolocation) return toast('Nincs GPS támogatás ezen az eszközön!');
+  toast('GPS mérés 6 másodpercig… kérlek ne mozogj!');
+  let best = null;
+  const id = navigator.geolocation.watchPosition(p => {
+    if (!best || p.coords.accuracy < best.acc) {
+      best = {lat: p.coords.latitude, lng: p.coords.longitude, acc: Math.round(p.coords.accuracy)};
+    }
+  }, () => toast('GPS hiba'), {enableHighAccuracy: true, maximumAge: 0});
+  setTimeout(async () => {
+    navigator.geolocation.clearWatch(id);
+    if (!best) return toast('Nem sikerült pozíciót fogni.');
+    await DB.set('config/main', {locs: {[l]: {...best, r: (cfg.locs[l] && cfg.locs[l].r) || DEFAULT_RADIUS}}});
+    toast(`Pozíció rögzítve! (Pontosság: ±${best.acc} m)`);
+  }, 6000);
+}
+
+$('#app').addEventListener('click', async e => {
+  if (e.target.dataset.big) return overlay(`<img src="${e.target.src}"><button class="ghost" style="max-width:280px;margin-top:12px" onclick="closeOverlay()">Bezár</button>`);
+  const t = e.target.closest('[data-tab]'); if (t) { tab = t.dataset.tab; frame(); draw(true); return; }
+  const b = e.target.closest('[data-a]'); if (!b) return;
+  const a = b.dataset.a, k = b.dataset.k, d = teams[k];
+
+  if (a === 'close') await DB.set('config/main', {closed: !cfg.closed});
+  else if (a === 'skip') await advance(k, 1);
+  else if (a === 'back') await advance(k, -1);
+  else if (a === 'pp' && d) await DB.set('teams/' + k, {points: (d.points || 0) + 50});
+  else if (a === 'pm' && d) await DB.set('teams/' + k, {points: Math.max(0, (d.points || 0) - 50)});
+  else if (a === 'reset' && d && confirm('Biztosan újraindítod a csapatot?')) {
+    await DB.set('teams/' + k, {step:0, phase:'go', points:0, resets:(d.resets||0)+1, lastActive:now(), sosActive:false, hintsUsed:[]});
+  }
+  else if (a === 'sendsos') {
+    const repVal = ($('#rep_' + k) || {}).value;
+    if (repVal && repVal.trim()) {
+      await DB.set('teams/' + k, {sosActive: false, sosReply: repVal.trim(), lastActive: now()});
+      toast('Válasz elküldve!');
+    }
+  }
+  else if (a === 'rec') recordLoc(b.dataset.l);
+  else if (a === 'clr') await DB.set('config/main', {locs: {[b.dataset.l]: null}});
+  else if (a === 'addstep') {
+    const which = prompt('Melyik csapathoz adjunk hozzá állomást? (red / green / blue)', 'red');
+    if (which && cfg.content.routes[which]) {
+      const newId = which[0] + (cfg.content.routes[which].length + 1);
+      cfg.content.routes[which].push({id: newId, name: 'Új állomás', clue: '📍🔍', type: 'photo', prompt: 'Írd be a feladatot!', hint: '', points: 100});
+      await DB.set('config/main', {contentJson: JSON.stringify(cfg.content)});
+      toast('Állomás hozzáadva!');
+      draw(true);
+    }
+  }
+  else if (a === 'delstep') {
+    const idx = parseInt(b.dataset.idx, 10);
+    if (confirm('Biztosan törlöd ezt az állomást?')) {
+      cfg.content.routes[k].splice(idx, 1);
+      await DB.set('config/main', {contentJson: JSON.stringify(cfg.content)});
+      toast('Állomás törölve!');
+      draw(true);
+    }
+  }
+  else if (a === 'saveeditor') {
+    const inputs = $('#app').querySelectorAll('[data-fld]');
+    inputs.forEach(inp => {
+      const kk = inp.dataset.k, idx = parseInt(inp.dataset.idx, 10), fld = inp.dataset.fld;
+      if (cfg.content.routes[kk] && cfg.content.routes[kk][idx]) {
+        let val = inp.value;
+        if (fld === 'points') val = parseInt(val, 10) || POINTS_PER_STEP;
+        cfg.content.routes[kk][idx][fld] = val;
+      }
+    });
+    await DB.set('config/main', {contentJson: JSON.stringify(cfg.content)});
+    toast('Állomások elmentve!');
+  }
+  else if (a === 'savejson') {
+    try {
+      const j = JSON.parse($('#cj').value);
+      if (!j.routes) throw 0;
+      await DB.set('config/main', {contentJson: JSON.stringify(j)});
+      toast('JSON elmentve!');
+    } catch(er) { toast('Hibás JSON!'); }
+  }
+  else if (a === 'wipe' && confirm('FIGYELEM: Minden csapat és beadvány törlődik. Biztos?')) {
+    for (const kk of TEAM_KEYS) await DB.del('teams/' + kk);
+    await DB.del('subs');
+    toast('Minden adat törölve!');
+  }
+});
+
+$('#app').addEventListener('change', async e => {
+  const el = e.target;
+  if (el.dataset.n) await DB.set('config/main', {teams: {[el.dataset.n]: {name: el.value.trim() || DEFAULT_TEAMS[el.dataset.n].name}}});
+  else if (el.dataset.c) await DB.set('config/main', {teams: {[el.dataset.c]: {color: el.value}}});
+  else if (el.dataset.f) await DB.set('config/main', {finals: {[el.dataset.f]: el.value}});
+  else if (el.dataset.r) {
+    const L = cfg.locs[el.dataset.r];
+    if (L) await DB.set('config/main', {locs: {[el.dataset.r]: {r: parseFloat(el.value) || DEFAULT_RADIUS}}});
+    else toast('Előbb rögzítsd a helyszínt!');
+  }
+});
+
+function init() {
+  const pin = sessionStorage.getItem('cir_admin') || prompt('Admin PIN jelszó');
+  if (pin !== ADMIN_PIN) { document.body.innerHTML = '<h2 style="color:red;padding:20px;text-align:center">Hibás PIN kód!</h2>'; return; }
+  sessionStorage.setItem('cir_admin', pin);
+
+  DB.watch('config/main', r => { remote = r || {}; build(); draw(tab !== 'set' || !$('#cj')); });
+  TEAM_KEYS.forEach(k => DB.watch('teams/' + k, d => {
+    if (d && d.sosActive && (!teams[k] || !teams[k].sosActive)) {
+      try { const ctx = new AudioContext(); const o = ctx.createOscillator(); o.frequency.value = 880; o.connect(ctx.destination); o.start(); setTimeout(() => o.stop(), 300); } catch(e){}
+    }
+    teams[k] = d; draw();
+  }));
+  DB.watchCol('subs', a => { subs = a.sort((x, y) => y.ts - x.ts); draw(); });
+  setInterval(() => (tab === 'live' || tab === 'proj') && draw(), 4000);
+  frame(); draw(true);
+}
+
+init();
+</script>
+</body>
+</html>

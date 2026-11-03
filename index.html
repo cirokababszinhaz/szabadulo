@@ -1,0 +1,800 @@
+<!doctype html>
+<html lang="hu">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b1d3a">
+<title>Ciróka Karácsonyi Mentőakció</title>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"></script>
+<style>
+:root{--bg:#0b1d3a;--card:#13294f;--ink:#f4f1ea;--mut:#9fb0cc;--gold:#ffc94d;--ok:#3ddc84;--bad:#ff6b6b;--warn:#ff922b}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;color:var(--ink);background:radial-gradient(circle at 50% -10%,#1d3f7a,#0b1d3a 60%);font:16px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+#app{max-width:480px;margin:0 auto;padding:12px 14px 60px;position:relative;z-index:1}
+.card{background:var(--card);border:1px solid #ffffff18;border-radius:18px;padding:18px;margin:12px 0;box-shadow:0 8px 24px #0006}
+h1{font-size:24px;margin:6px 0 4px}h2{font-size:18px;margin:0 0 8px}
+.eyebrow{color:var(--gold);font-size:12px;letter-spacing:.14em;text-transform:uppercase;font-weight:700}
+.small{color:var(--mut);font-size:13px}.center{text-align:center}
+button,.btn{display:block;width:100%;padding:14px 16px;margin:10px 0 0;border:0;border-radius:14px;background:var(--gold);color:#1b1b1b;font:700 16px inherit;cursor:pointer;text-align:center;transition:transform .1s,opacity .2s}
+button:active{transform:scale(.98)}
+button.ghost{background:#ffffff14;color:var(--ink);border:1px solid #ffffff30}
+button.sm{display:inline-block;width:auto;padding:8px 12px;font-size:13px;margin:6px 6px 0 0}
+button:disabled{opacity:.4;cursor:not-allowed}
+input,select,textarea{width:100%;padding:13px;border-radius:12px;border:1px solid #ffffff30;background:#0b1d3a;color:var(--ink);font:16px inherit;margin-top:8px}
+.teambtn{color:#fff;font-size:20px;padding:20px 16px;border-radius:16px;margin:10px 0}
+.clue{font-size:46px;text-align:center;margin:6px 0;line-height:1.2;word-break:break-word}
+.prog{height:8px;border-radius:99px;background:#ffffff18;overflow:hidden}
+.prog>i{display:block;height:100%;background:var(--gold);transition:width .5s}
+.chip{display:inline-block;padding:4px 12px;border-radius:99px;color:#fff;font-weight:700;font-size:13px}
+.row{display:flex;gap:10px;align-items:center;justify-content:space-between}
+.thumb{width:100%;border-radius:12px;display:block;object-fit:cover;max-height:260px}
+#overlay{position:fixed;inset:0;background:#000e;z-index:100;display:none;align-items:center;justify-content:center;flex-direction:column;padding:16px}
+#overlay video,#overlay img{max-width:100%;max-height:75vh;border-radius:14px}
+#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#000d;color:#fff;padding:12px 20px;border-radius:14px;z-index:120;display:none;max-width:90%;text-align:center;box-shadow:0 6px 20px #000a}
+.timer{font-size:56px;font-weight:900;text-align:center;font-variant-numeric:tabular-nums}
+.shake{animation:sh .35s}@keyframes sh{25%{transform:translateX(-8px)}75%{transform:translateX(8px)}}
+.flake{position:fixed;top:-20px;color:#fff;opacity:.5;z-index:0;pointer-events:none;animation:fall linear infinite}
+@keyframes fall{to{transform:translateY(110vh)}}
+.hintbox{background:#ffffff12;border-left:4px solid var(--gold);padding:10px 14px;border-radius:8px;margin:10px 0;font-size:14px}
+.sosbox{background:#ff6b6b22;border:1px solid var(--bad);padding:12px;border-radius:12px;margin:10px 0}
+.admin-reply-box{background:#3ddc8422;border:1px solid var(--ok);padding:12px;border-radius:12px;margin:10px 0}
+.santa-link{font-size:24px;text-decoration:none;display:inline-block;cursor:pointer;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.5));transition:transform .2s}
+.santa-link:hover{transform:scale(1.2)}
+
+/* ================= ANALÓG HOLVAGY-O-METER ================= */
+.gauge-wrap{width:270px;height:270px;margin:6px auto;position:relative}
+.gauge-svg{width:100%;height:100%;filter:drop-shadow(0 8px 18px rgba(0,0,0,0.6))}
+.needle{transform-origin:135px 135px;transition:transform 0.8s cubic-bezier(0.34, 1.56, 0.64, 1)}
+.sub-needle{transform-origin:135px 202px;transition:transform 0.6s ease-out}
+.gauge-reading{text-align:center;font-size:22px;font-weight:900;margin:6px 0 2px}
+.dist-badge{display:inline-block;background:#0b1d3a;padding:5px 14px;border-radius:99px;border:1px solid #ffffff30;font-size:14px;font-weight:800;color:var(--gold)}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="overlay"></div>
+<div id="toast"></div>
+
+<script>
+/* ================= FIREBASE REALTIME DATABASE BEÁLLÍTÁSOK ================= */
+const firebaseConfig = {
+  apiKey: "AIzaSyB_OyqkVCXsx2fLy1qdjQ2i9D-0KCMs0IY",
+  authDomain: "cirokaszabadulo.firebaseapp.com",
+  databaseURL: "https://cirokaszabadulo-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "cirokaszabadulo",
+  storageBucket: "cirokaszabadulo.firebasestorage.app",
+  messagingSenderId: "361410869966",
+  appId: "1:361410869966:web:3017e75f2d6c499539ee9f",
+  measurementId: "G-TM4ERQKV4H"
+};
+
+const PASSWORDS = ['aGyurikurvanagyarc', '$ucce$$'];
+const FINAL_UNLOCK_CODES = ['karacsony', 'mikulas', 'ciroka', 'ajandek', 'csillag', 'angyal', 'manok', 'renszarvasok', 'hoemberek', '$ucce$$'];
+const DEFAULT_RADIUS = 6;
+const POINTS_PER_STEP = 100;
+const HINT_PENALTY = 30;
+const SOS_PENALTY = 50;
+const TEAM_KEYS = ['red', 'green', 'blue'];
+const DEFAULT_TEAMS = {
+  red:   {name: 'Manók',         color: '#e5383b'},
+  green: {name: 'Rénszarvasok',  color: '#2d9d5b'},
+  blue:  {name: 'Hóemberek',     color: '#3a86ff'}
+};
+const DEFAULT_FINALS = {red: 'lego', green: 'gyurma', blue: 'szinezo'};
+const FINALS = {
+  lego:   {icon: '🧱🎄', title: 'LEGO-fenyő',      desc: 'Építsetek egy gyönyörű karácsonyfát LEGO-ból a tálcáról!'},
+  gyurma: {icon: '🐑⭐', title: 'Gyurma-betlehem', desc: 'Alkossatok betlehemi jelenetet gyurmából!'},
+  szinezo:{icon: '🎅🖍️', title: 'Mikulás-színező', desc: 'Színezzétek ki a legszebb ünnepi rajzot!'}
+};
+const FINAL_SECONDS = 180;
+
+const S = (id, name, clue, type, prompt, extra = {}) => ({id, name, clue, type, prompt, hint: '', points: POINTS_PER_STEP, ...extra});
+const DEFAULT_CONTENT = {routes: {
+  red: [
+    S('r1','Harry Potter-lépcső','⚡🪄','photo','Fotózzatok le egy tárgyat a lépcsőnél, ami szerintetek egy varázslótanonc kelléke lehetne!',{hint:'A színház leghíresebb belső lépcsőjét keressétek!'}),
+    S('r2','Kelléktár','🎭🧵🪡','count','Hány bábu lóg a kelléktár ajtaján/falán? (Minta)',{answer:'12',hint:'Számoljátok meg a bal oldali bábukat is!'}),
+    S('r3','Aula','🖼️📜🔍','text','Keressétek meg a legrégebbi plakátot. Melyik évből való?',{answer:'1985',hint:'Négyjegyű évszám az alsó sarokban!'}),
+    S('r4','Nézőtér','🎄🎶🎤','sing','Énekeljétek el együtt a Kis karácsony, nagy karácsony első versszakát!',{hint:'Legalább 6 másodpercig tiszta hanggal énekeljetek!'}),
+    S('r5','Büfé','☕🍪👀','qr','Keressétek meg a rejtett QR-kódot a büfében és olvassátok be!',{qr:'CIROKA-R5',hint:'Nézzetek a pult jobb szélére!'}),
+    S('r6','Iroda','🔔🧦🎁','photo','Fotózzatok le valamit, ami piros, kerek és karácsonyi!',{colorRule:'red',hint:'Az ablakpárkányon vagy a faliújságon érdemes kutatni.'})
+  ],
+  green: [
+    S('g1','Lépcsőház','🧙‍♂️🌟','photo','Fotózzatok le egy tárgyat a lépcsőházban, ami a Mikulás segítőjének kelléke!',{hint:'Bármi jó, amivel csomagolni lehet.'}),
+    S('g2','Műhely','🔨🪵🎨','count','Hány ecset van a műhelyben a nagy asztalon? (Minta)',{answer:'8',hint:'Csak a bögrében lévőket számoljátok!'}),
+    S('g3','Folyosó','📸🕰️🔎','text','Keressétek meg a régi csoportképet. Hány gyerek szerepel rajta?',{answer:'20',hint:'Fekete-fehér kép a folyosó végén.'}),
+    S('g4','Színpad','🎅🎶🎤','sing','Énekeljétek el együtt a Mennyből az angyal első versszakát!',{hint:'A színpadon bátran énekeljetek!'}),
+    S('g5','Öltöző','👗🪞👀','qr','Keressétek meg a rejtett QR-kódot a tükör közelében!',{qr:'CIROKA-G5',hint:'A tükör bal felső sarka!'}),
+    S('g6','Raktár','📦🔑🎁','photo','Fotózzatok le valamit, ami zöld és csomagolásra való!',{colorRule:'green',hint:'Zöld doboz vagy csomagolópapír.'})
+  ],
+  blue: [
+    S('b1','Előtér','❄️🧣','photo','Fotózzatok le egy tárgyat, ami szerintetek egy hóember kelléke lehetne!',{hint:'Sál, répa, gomb vagy kalap!'}),
+    S('b2','Pénztár','🎟️💰🪙','count','Hány jegytömb látható a pénztár polcán? (Minta)',{answer:'30',hint:'Kerek tízes szám.'}),
+    S('b3','Fotófal','🖼️🧐📅','text','Melyik évben volt az első előadás a fotófal szerint?',{answer:'1985',hint:'Olvassátok el a bekeretezett lapot!'}),
+    S('b4','Bejárat','🔔🎶🎤','sing','Énekeljétek el együtt a Jingle Bells vagy Hull a pelyhes refrénjét!',{hint:'Bármelyik vidám téli dal!'}),
+    S('b5','Raktár','🧰🔦👀','qr','Keressétek meg a rejtett QR-kódot a kellékes ládán!',{qr:'CIROKA-B5',hint:'A barna láda oldalán!'}),
+    S('b6','Teázó','☃️🥕🎁','photo','Fotózzatok le valamit, ami kék és csillog!',{colorRule:'blue',hint:'Szalag, girland vagy bögre.'})
+  ]
+}};
+
+/* ================= FIREBASE RTDB ADATRÉTEG ================= */
+firebase.initializeApp(firebaseConfig);
+const rtdb = firebase.database();
+
+const DB = {
+  watch: (p, cb) => {
+    const ref = rtdb.ref(p);
+    ref.on('value', snap => cb(snap.exists() ? snap.val() : null), err => console.error("RTDB hiba:", err));
+    return () => ref.off();
+  },
+  get: async p => {
+    const snap = await Promise.race([
+      rtdb.ref(p).once('value'),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Időtúllépés a Firebase kapcsolatban')), 5000))
+    ]);
+    return snap.exists() ? snap.val() : null;
+  },
+  set: async (p, d, merge = true) => {
+    if (merge) return rtdb.ref(p).update(d);
+    return rtdb.ref(p).set(d);
+  },
+  del: async p => rtdb.ref(p).remove()
+};
+
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const now = () => Date.now();
+const norm = s => String(s).trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ');
+
+let remote = {}, cfg;
+function build() {
+  let content = DEFAULT_CONTENT;
+  if (remote.contentJson) { try { const c = JSON.parse(remote.contentJson); if (c && c.routes) content = c; } catch (e) {} }
+  cfg = {
+    teams: {...DEFAULT_TEAMS, ...(remote.teams || {})},
+    finals: {...DEFAULT_FINALS, ...(remote.finals || {})},
+    locs: remote.locs || {},
+    gpsEnabled: remote.gpsEnabled !== undefined ? remote.gpsEnabled : true,
+    content,
+    closed: !!remote.closed
+  };
+}
+build();
+
+const stepsOf = k => (cfg.content.routes && cfg.content.routes[k]) || [];
+const locOf = s => s.loc || s.id;
+const hav = (a, b) => {
+  const R = 6371000, r = x => x * Math.PI / 180, dLa = r(b.lat - a.lat), dLo = r(b.lng - a.lng);
+  const h = Math.sin(dLa / 2) ** 2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(dLo / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+};
+
+function toast(m) {
+  const t = $('#toast'); t.textContent = m; t.style.display = 'block';
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.style.display = 'none', 3200);
+}
+function overlay(html) { const o = $('#overlay'); o.innerHTML = html; o.style.display = 'flex'; return o; }
+function closeOverlay() { const o = $('#overlay'); o.style.display = 'none'; o.innerHTML = ''; }
+
+function imgToData(file, max = 800, q = .55) {
+  return new Promise((ok, no) => {
+    const u = URL.createObjectURL(file), i = new Image();
+    i.onload = () => {
+      const s = Math.min(1, max / Math.max(i.width, i.height)), c = document.createElement('canvas');
+      c.width = Math.round(i.width * s); c.height = Math.round(i.height * s);
+      c.getContext('2d').drawImage(i, 0, 0, c.width, c.height); URL.revokeObjectURL(u); ok(c.toDataURL('image/jpeg', q));
+    };
+    i.onerror = no; i.src = u;
+  });
+}
+const blobData = b => new Promise(ok => { const r = new FileReader(); r.onload = () => ok(r.result); r.readAsDataURL(b); });
+
+/* KLIENSOLDALI KÉPELEMZŐ WORKER */
+function analyzeImageWorker(imgUrl, colorRule = '') {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      const cv = document.createElement('canvas'), cx = cv.getContext('2d');
+      cv.width = 100; cv.height = 100;
+      cx.drawImage(img, 0, 0, 100, 100);
+      const data = cx.getImageData(0, 0, 100, 100).data;
+      let brightness = 0, redCount = 0, greenCount = 0, blueCount = 0;
+      const totalPixels = data.length / 4;
+      for (let i = 0; i < data.length; i += 4) {
+        const r = data[i], g = data[i+1], b = data[i+2];
+        brightness += (r + g + b) / 3;
+        if (r > 100 && r > g * 1.35 && r > b * 1.35) redCount++;
+        if (g > 90 && g > r * 1.25 && g > b * 1.25) greenCount++;
+        if (b > 100 && b > r * 1.3 && b > g * 1.3) blueCount++;
+      }
+      const avgBrightness = brightness / totalPixels;
+      if (avgBrightness < 16) return resolve({ok: false, msg: 'Túl sötét a fotó! Kapcsoljatok vakut vagy keressetek világosabb helyet.'});
+      if (colorRule === 'red' && (redCount / totalPixels < 0.04)) return resolve({ok: false, msg: 'A kép felismerő nem talált elegendő piros színt a fotón!'});
+      if (colorRule === 'green' && (greenCount / totalPixels < 0.04)) return resolve({ok: false, msg: 'A kép felismerő nem talált elegendő zöld színt a fotón!'});
+      if (colorRule === 'blue' && (blueCount / totalPixels < 0.04)) return resolve({ok: false, msg: 'A kép felismerő nem talált elegendő kék színt a fotón!'});
+      return resolve({ok: true, msg: 'Felismerés sikeres: megfelelő motívum és minőség!'});
+    };
+    img.onerror = () => resolve({ok: true, msg: 'Fotó elfogadva!'});
+    img.src = imgUrl;
+  });
+}
+
+async function scanQR() {
+  const o = overlay('<video id="qv" playsinline muted style="width:100%;max-width:340px;background:#000;border-radius:12px"></video><div class="small" style="margin:12px">Irányítsd a kamerát a QR-kódra!</div><button class="ghost" id="qc" style="max-width:280px">Mégse</button>');
+  const v = $('#qv'); let stream, stop = false;
+  return new Promise(async res => {
+    const done = val => { stop = true; if (stream) stream.getTracks().forEach(t => t.stop()); closeOverlay(); res(val); };
+    $('#qc').onclick = () => done(null);
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({video: {facingMode: 'environment'}});
+      v.srcObject = stream; await v.play();
+    } catch (e) { toast('Nem érhető el a kamera!'); return done(null); }
+    const det = 'BarcodeDetector' in window ? new BarcodeDetector({formats: ['qr_code']}) : null;
+    const cv = document.createElement('canvas'), cx = cv.getContext('2d', {willReadFrequently: true});
+    const loop = async () => {
+      if (stop) return;
+      try {
+        if (det) { const c = await det.detect(v); if (c.length) return done(c[0].rawValue); }
+        else if (v.videoWidth && window.jsQR) {
+          cv.width = v.videoWidth; cv.height = v.videoHeight; cx.drawImage(v, 0, 0);
+          const r = jsQR(cx.getImageData(0, 0, cv.width, cv.height).data, cv.width, cv.height);
+          if (r) return done(r.data);
+        }
+      } catch (e) {}
+      setTimeout(loop, 180);
+    };
+    loop();
+  });
+}
+
+function snow() {
+  let h = ''; for (let i = 0; i < 20; i++) h += `<div class="flake" style="left:${Math.random() * 100}%;font-size:${8 + Math.random() * 14}px;animation-duration:${8 + Math.random() * 12}s;animation-delay:${-Math.random() * 15}s">❄</div>`;
+  document.body.insertAdjacentHTML('beforeend', h);
+}
+
+/* ================= JÁTÉKOS LOGIKA ================= */
+let sid = localStorage.getItem('cir_sid') || (() => { const v = Math.random().toString(36).slice(2) + now().toString(36); localStorage.setItem('cir_sid', v); return v; })();
+let team = localStorage.getItem('cir_team') || null, td = null, unsubTeam = null, screen = '', lastKey = '';
+let pos = null, buf = [], hits = 0, watchId = null, hb = null, tickT = null;
+
+const fresh = (session, resets = 0) => ({
+  step: 0, phase: 'go', points: 0, session, claimedAt: now(), lastSeen: now(), lastActive: now(),
+  dist: null, acc: null, resets, finalStart: null, finalUnlocked: false, hintsUsed: [], sosActive: false, sosMsg: '', sosReply: ''
+});
+
+function app() { return $('#app'); }
+
+function loginScreen() {
+  screen = 'login';
+  app().innerHTML = `<div class="card center">
+    <div class="row" style="margin-bottom:6px"><span class="eyebrow">Ciróka Mentőakció</span><a href="admin.html" class="santa-link" title="Admin felület megnyitása">🎅</a></div>
+    <h1>A Mikulás mentőrendszere</h1>
+    <p class="small">Rendkívüli hír az Északi-sarkról! A karácsonyi koordináták elvesztek. A Ciróka csapatai az utolsó remény!</p>
+    <input id="pw" type="password" placeholder="Mikulás-azonosító jelszó" autocomplete="off">
+    <button id="go">Belépés a küldetésbe</button>
+  </div>`;
+  const go = () => {
+    const val = $('#pw').value.trim();
+    if (PASSWORDS.includes(val)) { localStorage.setItem('cir_auth', '1'); teamsScreen(); }
+    else { $('#pw').classList.add('shake'); setTimeout(() => $('#pw').classList.remove('shake'), 400); toast('Hibás jelszó!'); }
+  };
+  $('#go').onclick = go;
+  $('#pw').addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+}
+
+function teamsScreen() {
+  screen = 'teams'; detach();
+  app().innerHTML = `<div class="card center">
+    <div class="row" style="margin-bottom:6px"><span class="eyebrow">02 / Csapatválasztás</span><a href="admin.html" class="santa-link" title="Admin felület megnyitása">🎅</a></div>
+    <h1>Melyik mentőegységhez tartozol?</h1>
+    <p class="small">Csapatonként egyetlen központi telefonnal induljatok!</p>
+    <div id="btnList">
+      ${TEAM_KEYS.map(k => `<button class="teambtn" id="tb_${k}" data-k="${k}" style="background:${cfg.teams[k].color}">${esc(cfg.teams[k].name)}</button>`).join('')}
+    </div>
+  </div>`;
+  app().querySelectorAll('.teambtn').forEach(b => {
+    b.onclick = () => enterTeam(b.dataset.k, b);
+  });
+}
+
+async function enterTeam(k, btnEl) {
+  if (btnEl) { btnEl.disabled = true; btnEl.innerHTML = `⏳ Csatlakozás a csapathoz…`; }
+  try {
+    const d = await DB.get('teams/' + k);
+    if (d && d.session && d.session !== sid) {
+      if (!confirm('Ez a csapat már játékban van egy másik telefonon!\n\nHa átveszed, a játék az elejére ugrik, és a másik telefon kilép. Folytatod?')) {
+        if (btnEl) { btnEl.disabled = false; btnEl.innerHTML = esc(cfg.teams[k].name); }
+        return;
+      }
+    }
+    await DB.set('teams/' + k, fresh(sid, d ? (d.resets || 0) + 1 : 0), false);
+    team = k;
+    localStorage.setItem('cir_team', k);
+    attach();
+  } catch(err) {
+    console.error("Belépési hiba:", err);
+    alert("⚠️ HIBA A BELÉPÉSKOR:\n\n" + err.message);
+    if (btnEl) { btnEl.disabled = false; btnEl.innerHTML = esc(cfg.teams[k].name); }
+  }
+}
+
+function detach() {
+  if (unsubTeam) { unsubTeam(); unsubTeam = null; }
+  if (watchId != null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+  clearInterval(hb); clearInterval(tickT);
+  td = null; lastKey = '';
+}
+
+function attach() {
+  detach(); screen = 'play';
+  unsubTeam = DB.watch('teams/' + team, d => {
+    if (!d || d.session !== sid) return kicked(d);
+    td = d; renderPlay();
+  });
+  if (cfg.gpsEnabled && navigator.geolocation) {
+    watchId = navigator.geolocation.watchPosition(onPos, () => { pos = null; updateMeter(); }, {enableHighAccuracy: true, maximumAge: 1000, timeout: 20000});
+  }
+  hb = setInterval(heartbeat, 4000);
+}
+
+function kicked(d) {
+  detach(); localStorage.removeItem('cir_team'); team = null; screen = 'kicked';
+  app().innerHTML = `<div class="card center"><h1>🔄</h1><h2>${d ? 'Egy másik készülék belépett ezzel a csapattal' : 'A játék újraindult'}</h2><p class="small">Ezen a telefonon a küldetés megszakadt.</p><button id="back">Vissza a csapatválasztáshoz</button></div>`;
+  $('#back').onclick = teamsScreen;
+}
+
+function curTarget() {
+  if (!td || td.phase !== 'go') return null;
+  const s = stepsOf(team)[td.step]; if (!s) return null;
+  return {s, L: cfg.locs[locOf(s)]};
+}
+
+function onPos(p) {
+  buf.push({lat: p.coords.latitude, lng: p.coords.longitude}); if (buf.length > 3) buf.shift();
+  pos = {lat: buf.reduce((a, b) => a + b.lat, 0) / buf.length, lng: buf.reduce((a, b) => a + b.lng, 0) / buf.length, acc: p.coords.accuracy};
+  updateMeter();
+  const t = curTarget();
+  if (t && t.L) {
+    const d = hav(pos, t.L);
+    if (d <= (t.L.r || DEFAULT_RADIUS)) { if (++hits >= 2) { hits = 0; unlock(); } } else hits = 0;
+  }
+}
+
+function unlock() { if (td && td.phase === 'go') DB.set('teams/' + team, {phase: 'task', lastActive: now()}); }
+
+function heartbeat() {
+  if (!td || screen !== 'play') return;
+  const t = curTarget(); let dist = null;
+  if (t && t.L && pos) dist = Math.round(hav(pos, t.L) * 10) / 10;
+  DB.set('teams/' + team, {lastSeen: now(), dist, acc: pos ? Math.round(pos.acc) : null});
+}
+
+/* ================= ANALÓG GAUGE ================= */
+function getHeatFactor(dist, r) {
+  if (dist <= r) return 1.0;
+  if (dist <= r * 2) return 0.88;
+  if (dist <= 15) return 0.72;
+  if (dist <= 30) return 0.50;
+  if (dist <= 60) return 0.30;
+  if (dist <= 120) return 0.15;
+  return 0.04;
+}
+
+function updateMeter() {
+  const needle = $('#mainNeedle'), subNeedle = $('#subNeedle'), txt = $('#gaugeTxt'), distBadge = $('#distBadge'), gpsAcc = $('#gpsAcc');
+  if (!needle || !txt) return;
+  const t = curTarget();
+  if (!t || !t.L) {
+    needle.style.transform = 'rotate(-115deg)';
+    txt.textContent = '📍 Helyszín-QR keresése szükséges';
+    txt.style.color = 'var(--mut)';
+    if (distBadge) distBadge.textContent = 'Használjátok a QR-kódot!';
+    return;
+  }
+  if (!pos) {
+    needle.style.transform = 'rotate(-115deg)';
+    txt.textContent = '📡 GPS jel keresése…';
+    txt.style.color = 'var(--mut)';
+    if (distBadge) distBadge.textContent = 'Menj szabadabb térbe!';
+    return;
+  }
+  const d = hav(pos, t.L);
+  const factor = getHeatFactor(d, t.L.r || DEFAULT_RADIUS);
+  const angle = -115 + factor * 230;
+  needle.style.transform = `rotate(${angle}deg)`;
+
+  if (subNeedle) {
+    const subAngle = Math.max(-60, Math.min(60, 60 - (d / 80) * 120));
+    subNeedle.style.transform = `rotate(${subAngle}deg)`;
+  }
+  if (distBadge) distBadge.textContent = `📍 Távolság: kb. ${Math.round(d)} méter`;
+  if (gpsAcc) gpsAcc.textContent = `(GPS pontosság: ±${Math.round(pos.acc)} m)`;
+
+  if (factor >= 0.95) { txt.textContent = '🔥 FORRÓ! ITT VAGYTOK!'; txt.style.color = 'var(--bad)'; }
+  else if (factor >= 0.70) { txt.textContent = '🌶️ FORRÓ! Nagyon közel!'; txt.style.color = 'var(--warn)'; }
+  else if (factor >= 0.45) { txt.textContent = '🙂 MELEG! Jó irányban jártok!'; txt.style.color = 'var(--gold)'; }
+  else if (factor >= 0.25) { txt.textContent = '😐 LANGYOS…'; txt.style.color = '#74c0fc'; }
+  else { txt.textContent = '🥶 HIDEG… távolodtok!'; txt.style.color = '#a5d8ff'; }
+}
+
+function shell() {
+  app().innerHTML = `<div class="row">
+    <div style="display:flex;align-items:center;gap:8px">
+      <span class="chip" id="tchip"></span>
+      <span class="small" id="tpts"></span>
+    </div>
+    <a href="admin.html" class="santa-link" title="Admin felület megnyitása">🎅</a>
+  </div>
+  <div class="prog" style="margin-top:10px"><i id="tprog" style="width:0"></i></div>
+  <div id="body"></div>`;
+}
+
+function renderPlay() {
+  if (cfg.closed) { detach(); app().innerHTML = '<div class="card center"><h1>🎄</h1><h2>A küldetés lezárult!</h2><p class="small">Gyertek a közös terembe!</p></div>'; return; }
+  if (!$('#body')) { shell(); lastKey = ''; }
+  const st = stepsOf(team), t = cfg.teams[team], total = st.length + 1;
+  const done = td.phase === 'done' ? total : Math.min(td.step, st.length);
+  $('#tchip').textContent = t.name; $('#tchip').style.background = t.color;
+  $('#tpts').textContent = '⭐ ' + (td.points || 0) + ' pont';
+  $('#tprog').style.width = Math.round(done / total * 100) + '%';
+
+  const key = [team, td.step, td.phase, td.finalStart || 0, td.finalUnlocked, (td.hintsUsed || []).join(','), td.sosActive, td.sosReply || ''].join('|');
+  if (key === lastKey) return; lastKey = key; hits = 0; clearInterval(tickT);
+  const b = $('#body');
+
+  if (td.phase === 'done') {
+    b.innerHTML = `<div class="card center">
+      <div style="font-size:68px">🎉🎅🎄</div>
+      <h1>Megmentettétek a karácsonyt!</h1>
+      <p>Minden koordináta helyreállt, a kézműves alkotás kész, a rénszarvasok felszálltak!</p>
+      <div style="font-size:26px;font-weight:900;color:var(--gold);margin:14px 0">⭐ ${td.points || 0} pont</div>
+      <p class="small">Gyertek a színpad elé, kezdődik az eredményhirdetés és a közös visszajátszás!</p>
+    </div>`;
+    return;
+  }
+
+  if (td.phase === 'final') return finalUI(b);
+  const s = st[td.step]; if (!s) return;
+
+  const hintUsed = (td.hintsUsed || []).includes(td.step);
+  let extraHtml = '';
+  if (hintUsed && s.hint) extraHtml += `<div class="hintbox"><b>💡 Megszerzett tipp:</b> ${esc(s.hint)}</div>`;
+  if (td.sosReply) extraHtml += `<div class="admin-reply-box"><b>📢 Üzenet az Admintól:</b><br>${esc(td.sosReply)}</div>`;
+  else if (td.sosActive) extraHtml += `<div class="sosbox"><span class="sos-badge">SOS KÜLDVE</span> A segítségkérés eljutott a központba, hamarosan válaszolnak!</div>`;
+
+  if (td.phase === 'go') {
+    // HA 0. LÉPÉS (KEZDŐPONT): Nem áruljuk el a konkrét nyomot, csak a műszerre hagyatkoznak!
+    const isFirstStep = (td.step === 0);
+    const stepTitle = isFirstStep ? 'Titkos Kiindulópont felkutatása' : `${td.step + 1} / ${st.length}. Állomás keresése`;
+    const clueEmoji = isFirstStep ? '🧭❓' : esc(s.clue);
+    const clueDesc = isFirstStep ?
+      '<p class="small center" style="color:var(--gold);font-weight:700">A küldetés helyszíne titkos! Induljatok el az épületben – nincs szöveges nyom, pusztán a Holvagy-o-meter mutatója és a méterek vezetnek a kezdőponthoz!</p>' :
+      `<div class="center" style="font-weight:700;margin-bottom:8px">${esc(s.name)} nyomai</div>`;
+
+    b.innerHTML = `<div class="card">
+      <div class="row">
+        <div class="eyebrow">${stepTitle}</div>
+        <span class="small">⭐ +${s.points || POINTS_PER_STEP} pont</span>
+      </div>
+      <div class="clue">${clueEmoji}</div>
+      ${clueDesc}
+
+      <!-- TISZTA, NAGY FELIRATÚ ANALÓG HOLVAGY-O-METER -->
+      <div class="gauge-wrap">
+        <svg class="gauge-svg" viewBox="0 0 270 270">
+          <defs>
+            <radialGradient id="chromeBezel" cx="40%" cy="30%" r="70%">
+              <stop offset="0%" stop-color="#ffffff"/>
+              <stop offset="35%" stop-color="#cfd8dc"/>
+              <stop offset="70%" stop-color="#78909c"/>
+              <stop offset="100%" stop-color="#263238"/>
+            </radialGradient>
+            <radialGradient id="dialFace" cx="50%" cy="45%" r="55%">
+              <stop offset="0%" stop-color="#ffffff"/>
+              <stop offset="85%" stop-color="#f8f9fa"/>
+              <stop offset="100%" stop-color="#cfd8dc"/>
+            </radialGradient>
+          </defs>
+          <!-- Krómozott fém keret -->
+          <circle cx="135" cy="135" r="130" fill="url(#chromeBezel)"/>
+          <circle cx="135" cy="135" r="122" fill="#1c2a38"/>
+          <circle cx="135" cy="135" r="118" fill="url(#dialFace)"/>
+
+          <!-- Három fő ív (Kék = HIDEG, Zöld = MELEG, Piros = FORRÓ) -->
+          <path d="M 45 135 A 90 90 0 0 1 88 60" fill="none" stroke="#2979ff" stroke-width="14" stroke-linecap="round"/>
+          <path d="M 102 50 A 90 90 0 0 1 168 50" fill="none" stroke="#00e676" stroke-width="14" stroke-linecap="round"/>
+          <path d="M 182 60 A 90 90 0 0 1 225 135" fill="none" stroke="#ff1744" stroke-width="14" stroke-linecap="round"/>
+
+          <!-- Nagy, kontrasztos, tiszta magyar feliratok -->
+          <text x="56" y="112" font-size="14" font-weight="900" fill="#1565c0" transform="rotate(-48 56 112)">HIDEG</text>
+          <text x="135" y="42" font-size="15" font-weight="900" fill="#2e7d32" text-anchor="middle">MELEG</text>
+          <text x="214" y="112" font-size="14" font-weight="900" fill="#c62828" transform="rotate(48 214 112)" text-anchor="end">FORRÓ</text>
+
+          <text x="135" y="85" font-size="13" font-weight="900" fill="#37474f" text-anchor="middle" letter-spacing="1.5">HOLVAGY-O-METER</text>
+
+          <!-- Alsó méter segédskála -->
+          <path d="M 95 200 A 40 40 0 0 1 175 200" fill="none" stroke="#b0bec5" stroke-width="6"/>
+          <path d="M 95 200 A 40 40 0 0 1 120 172" fill="none" stroke="#ff1744" stroke-width="6"/>
+          <path d="M 120 172 A 40 40 0 0 1 150 172" fill="none" stroke="#00e676" stroke-width="6"/>
+          <path d="M 150 172 A 40 40 0 0 1 175 200" fill="none" stroke="#2979ff" stroke-width="6"/>
+          <text x="135" y="194" font-size="9" font-weight="900" fill="#546e7a" text-anchor="middle">TÁVOLSÁG</text>
+
+          <!-- Alsó mutató -->
+          <g id="subNeedle" class="sub-needle" style="transform:rotate(-40deg)">
+            <line x1="135" y1="202" x2="135" y2="175" stroke="#212121" stroke-width="3" stroke-linecap="round"/>
+            <circle cx="135" cy="202" r="4.5" fill="#212121"/>
+          </g>
+
+          <!-- Fő mutató -->
+          <g id="mainNeedle" class="needle" style="transform:rotate(-115deg)">
+            <polygon points="132,135 135,30 138,135 135,150" fill="#d50000"/>
+            <line x1="135" y1="30" x2="135" y2="148" stroke="#ffffff" stroke-width="1.2"/>
+            <circle cx="135" cy="135" r="11" fill="#212121"/>
+            <circle cx="135" cy="135" r="5" fill="#424242"/>
+            <circle cx="133" cy="133" r="2" fill="#ffffff" opacity="0.6"/>
+          </g>
+        </svg>
+      </div>
+
+      <div class="gauge-reading" id="gaugeTxt">📡 Célpont keresése…</div>
+      <div class="center" style="margin-bottom:8px">
+        <span class="dist-badge" id="distBadge">GPS pozicionálás folyamatban…</span>
+      </div>
+      <div class="small center" id="gpsAcc" style="margin-bottom:12px"></div>
+
+      <button class="ghost" id="qrloc">📷 Helyszín-QR beolvasása (ha a GPS bizonytalan)</button>
+      <p class="small center">A feladat magától kinyílik ha odaértek, vagy ha beolvassátok a helyszín QR kódját.</p>
+
+      ${extraHtml}
+      <div class="row" style="margin-top:14px">
+        ${(!hintUsed && s.hint && !isFirstStep) ? `<button class="sm ghost" id="getHint">💡 Tipp kérése (-${HINT_PENALTY} ⭐)</button>` : ''}
+        ${(!td.sosActive) ? `<button class="sm ghost" id="callSos">🆘 Segítség kérése (-${SOS_PENALTY} ⭐)</button>` : ''}
+      </div>
+    </div>`;
+
+    $('#qrloc').onclick = async () => {
+      const r = await scanQR(); if (r == null) return;
+      if (r.trim() === 'ciroka:' + locOf(s)) unlock(); else toast('Ez nem ennek az állomásnak a QR-kódja 🤔');
+    };
+    if ($('#getHint')) $('#getHint').onclick = () => claimHint(s);
+    if ($('#callSos')) $('#callSos').onclick = askSos;
+    updateMeter();
+  } else {
+    taskUI(b, s, extraHtml, hintUsed);
+  }
+}
+
+function taskUI(b, s, extraHtml, hintUsed) {
+  const st = stepsOf(team);
+  b.innerHTML = `<div class="card">
+    <div class="row"><div class="eyebrow">${td.step + 1} / ${st.length} · ${esc(s.name)}</div><span class="small">⭐ +${s.points || POINTS_PER_STEP} pont</span></div>
+    <h2 style="margin-top:8px">${esc(s.prompt)}</h2>
+    <div id="task"></div>
+    <div id="workerFeedback" class="small center" style="margin-top:8px;font-weight:700"></div>
+    ${extraHtml}
+    <div class="row" style="margin-top:14px">
+      ${(!hintUsed && s.hint) ? `<button class="sm ghost" id="getHint">💡 Tipp kérése (-${HINT_PENALTY} ⭐)</button>` : ''}
+      ${(!td.sosActive) ? `<button class="sm ghost" id="callSos">🆘 Segítség kérése (-${SOS_PENALTY} ⭐)</button>` : ''}
+    </div>
+  </div>`;
+
+  if ($('#getHint')) $('#getHint').onclick = () => claimHint(s);
+  if ($('#callSos')) $('#callSos').onclick = askSos;
+
+  const T = $('#task');
+  const lock = btn => { btn.disabled = true; btn.textContent = 'Ellenőrzés folyamatban…'; };
+
+  if (s.type === 'count' || s.type === 'text') {
+    T.innerHTML = `<input id="ans" ${s.type === 'count' ? 'inputmode="numeric"' : ''} placeholder="${s.type === 'count' ? 'Írd be a számot…' : 'Írd be a választ…'}" autocomplete="off"><button id="sendA">Ellenőrzés és beküldés</button>`;
+    const doSubmit = async () => {
+      const v = $('#ans').value; if (!v.trim()) return;
+      const ok = !s.answer || String(s.answer).split('|').some(a => norm(a) === norm(v));
+      if (!ok) { $('#ans').classList.add('shake'); setTimeout(() => $('#ans').classList.remove('shake'), 400); return toast('Nem egészen… próbáljátok újra!'); }
+      lock($('#sendA')); await submit(s, s.type, null, v.trim());
+    };
+    $('#sendA').onclick = doSubmit;
+    $('#ans').onkeydown = e => { if (e.key === 'Enter') doSubmit(); };
+  } else if (s.type === 'photo') {
+    T.innerHTML = `<input type="file" id="pf" accept="image/*" capture="environment" hidden><button id="pick">📷 Fotó készítése</button><div id="prev"></div>`;
+    $('#pick').onclick = () => $('#pf').click();
+    $('#pf').onchange = async e => {
+      const f = e.target.files[0]; if (!f) return;
+      $('#workerFeedback').textContent = '🤖 Képelemző vizsgálja a fotót…';
+      const url = await imgToData(f);
+      const res = await analyzeImageWorker(url, s.colorRule || '');
+      if (!res.ok) {
+        $('#workerFeedback').textContent = '⚠️ ' + res.msg;
+        $('#workerFeedback').style.color = 'var(--bad)';
+        toast(res.msg);
+        return;
+      }
+      $('#workerFeedback').textContent = '✅ ' + res.msg;
+      $('#workerFeedback').style.color = 'var(--ok)';
+      $('#prev').innerHTML = `<img class="thumb" src="${url}" style="margin-top:12px;cursor:default"><button id="sendP">✅ Fotó beküldése</button>`;
+      $('#sendP').onclick = async () => { lock($('#sendP')); await submit(s, 'photo', url); };
+    };
+  } else if (s.type === 'qr') {
+    T.innerHTML = '<button id="scan">📷 Rejtett QR-kód beolvasása</button>';
+    $('#scan').onclick = async () => {
+      const r = await scanQR(); if (r == null) return;
+      if (!s.qr || r.trim() === s.qr) { lock($('#scan')); await submit(s, 'qr', null, r.trim()); } else toast('Ez nem a keresett kód 🤔');
+    };
+  } else if (s.type === 'sing') singUI(T, s, lock);
+}
+
+function singUI(T, s, lock) {
+  T.innerHTML = '<button id="rec">🎤 Ének felvétele (max 30 mp)</button><div class="small center" id="recinfo" style="margin-top:6px"></div><div id="prev"></div>';
+  let rec, chunks = [], timer, t0;
+  $('#rec').onclick = async () => {
+    if (rec && rec.state === 'recording') { rec.stop(); return; }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+      const mt = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm'].find(m => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || '';
+      chunks = []; rec = new MediaRecorder(stream, mt ? {mimeType: mt, audioBitsPerSecond: 28000} : {audioBitsPerSecond: 28000});
+      rec.ondataavailable = e => e.data.size && chunks.push(e.data);
+      rec.onstop = async () => {
+        clearInterval(timer); stream.getTracks().forEach(t => t.stop());
+        const durationSec = Math.floor((now() - t0) / 1000);
+        if (durationSec < 4) {
+          toast('Túl rövid volt a felvétel, énekeljetek legalább 5 másodpercig!');
+          $('#rec').textContent = '🔁 Újrafelvétel';
+          return;
+        }
+        $('#rec').textContent = '🔁 Újrafelvétel'; $('#recinfo').textContent = '';
+        const url = await blobData(new Blob(chunks, {type: rec.mimeType || 'audio/webm'}));
+        $('#prev').innerHTML = `<audio controls src="${url}" style="width:100%;margin-top:12px"></audio><button id="sendS">✅ Ének beküldése</button>`;
+        $('#sendS').onclick = async () => {
+          if (url.length > 950000) return toast('Túl hosszú az ének, vegyétek fel rövidebben!');
+          lock($('#sendS')); await submit(s, 'sing', url);
+        };
+      };
+      rec.start(); t0 = now(); $('#rec').textContent = '⏹ Felvétel leállítása';
+      timer = setInterval(() => {
+        const e = Math.floor((now() - t0) / 1000);
+        $('#recinfo').textContent = '🔴 Rögzítés: ' + e + ' / 30 mp';
+        if (e >= 30) rec.stop();
+      }, 300);
+    } catch (e) { toast('Nem érhető el a mikrofon!'); }
+  };
+}
+
+async function claimHint(s) {
+  if (!confirm(`Biztosan kérsz egy tippet?\nEz ${HINT_PENALTY} pont levonással jár!`)) return;
+  const hints = td.hintsUsed ? [...td.hintsUsed] : [];
+  if (!hints.includes(td.step)) hints.push(td.step);
+  await DB.set('teams/' + team, {
+    points: Math.max(0, (td.points || 0) - HINT_PENALTY),
+    hintsUsed: hints,
+    lastActive: now()
+  });
+  toast('Tipp feloldva!');
+}
+
+async function askSos() {
+  const msg = prompt(`Segítségkérés a Központtól.\nEz ${SOS_PENALTY} pont levonással jár.\n\nMiben akadtatok el?`);
+  if (!msg || !msg.trim()) return;
+  await DB.set('teams/' + team, {
+    sosActive: true,
+    sosMsg: msg.trim(),
+    sosReply: '',
+    sosTime: now(),
+    points: Math.max(0, (td.points || 0) - SOS_PENALTY),
+    lastActive: now()
+  });
+  toast('Segítségkérés elküldve!');
+}
+
+async function submit(s, type, data, answer) {
+  const id = team + '_' + td.step + '_' + now();
+  await DB.set('subs/' + id, {team, stepId: s.id, stepName: s.name, type, data: data || null, answer: answer || null, ts: now()}, false);
+  const n = td.step + 1;
+  const earned = s.points || POINTS_PER_STEP;
+  await DB.set('teams/' + team, {
+    step: n,
+    phase: n >= stepsOf(team).length ? 'final' : 'go',
+    points: (td.points || 0) + earned,
+    sosReply: '',
+    lastActive: now()
+  });
+  toast(`🎉 Feladat teljesítve! (+${earned} ⭐)`);
+}
+
+/* ================= FINÁLÉ KÓDOS FELOLDÁSSAL ================= */
+function finalUI(b) {
+  const f = FINALS[cfg.finals[team]] || FINALS.lego;
+
+  // 1. ÁLLAPOT: Visszaértek az asztalhoz, de még be kell írniuk a feloldókódot!
+  if (!td.finalUnlocked) {
+    b.innerHTML = `<div class="card center">
+      <div class="eyebrow">A KÜLDETÉS UTOLSÓ SZAKASZA</div>
+      <div class="clue">🎁🔐</div>
+      <h1>Minden állomás teljesítve!</h1>
+      <p>Sikeresen összegyűjtöttétek a koordinátákat! Most menjetek az asztalotokhoz a nagyteremben.</p>
+      <p class="small" style="color:var(--gold);font-weight:700">Üssétek be a feloldókódot az asztalról, hogy kiderüljön, melyik alkotó feladat a tiétek!</p>
+      <input id="finalCodeInput" placeholder="Feloldókód beírása…" autocomplete="off" style="text-align:center;font-weight:800;letter-spacing:2px">
+      <button id="unlockFinalBtn">🔓 Feladat leleplezése</button>
+    </div>`;
+
+    const doUnlock = async () => {
+      const v = norm($('#finalCodeInput').value);
+      if (!v) return;
+      const allowed = FINAL_UNLOCK_CODES.map(norm);
+      if (allowed.includes(v) || v === norm(cfg.teams[team].name)) {
+        await DB.set('teams/' + team, {finalUnlocked: true, lastActive: now()});
+        toast('Sikeres feloldás!');
+      } else {
+        $('#finalCodeInput').classList.add('shake');
+        setTimeout(() => $('#finalCodeInput').classList.remove('shake'), 400);
+        toast('Hibás feloldókód!');
+      }
+    };
+    $('#unlockFinalBtn').onclick = doUnlock;
+    $('#finalCodeInput').onkeydown = e => { if (e.key === 'Enter') doUnlock(); };
+    return;
+  }
+
+  // 2. ÁLLAPOT: A kód helyes volt, megmutatja a konkrét feladatot és indul az időzítő!
+  b.innerHTML = `<div class="card center">
+    <div class="eyebrow">DÖNTŐ KÉZMŰVES FELADAT</div>
+    <div class="clue">${f.icon}</div>
+    <h1 style="color:var(--gold)">${esc(f.title)}</h1>
+    <p style="font-size:18px;font-weight:700">${esc(f.desc)}</p>
+    <p class="small">Keresd meg az asztalotokon az ehhez tartozó tálcát! Az alkotásra ${FINAL_SECONDS / 60} percetek van.</p>
+    <div id="fx"></div>
+  </div>`;
+
+  const fx = $('#fx');
+  if (!td.finalStart) {
+    fx.innerHTML = '<button id="fstart">⏱️ Indítom a 3 perces visszaszámlálást!</button>';
+    $('#fstart').onclick = () => DB.set('teams/' + team, {finalStart: now(), lastActive: now()});
+    return;
+  }
+  fx.innerHTML = `<div class="timer" id="ftm"></div>
+    <input type="file" id="ff" accept="image/*" capture="environment" hidden>
+    <button id="fpick">📷 Elkészült alkotás lefotózása</button>
+    <div id="prev"></div>`;
+  const tick = () => {
+    const left = Math.max(0, FINAL_SECONDS - Math.floor((now() - td.finalStart) / 1000));
+    const e = $('#ftm'); if (!e) return;
+    e.textContent = Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0');
+    e.style.color = left === 0 ? 'var(--bad)' : (left <= 30 ? 'var(--warn)' : '');
+  };
+  tick(); tickT = setInterval(tick, 500);
+
+  $('#fpick').onclick = () => $('#ff').click();
+  $('#ff').onchange = async e => {
+    const file = e.target.files[0]; if (!file) return;
+    toast('Fotó feldolgozása…');
+    const url = await imgToData(file);
+    $('#prev').innerHTML = `<img class="thumb" src="${url}" style="margin-top:12px;cursor:default"><button id="fsend">✅ Küldetés befejezése és fotó beküldése</button>`;
+    $('#fsend').onclick = async () => {
+      $('#fsend').disabled = true;
+      await DB.set('subs/' + team + '_final_' + now(), {team, stepId: 'final', stepName: f.title, type: 'final', data: url, answer: null, ts: now()}, false);
+      await DB.set('teams/' + team, {phase: 'done', finishedAt: now(), points: (td.points || 0) + POINTS_PER_STEP, lastActive: now()});
+    };
+  };
+}
+
+async function start() {
+  snow();
+  DB.watch('config/main', r => {
+    remote = r || {}; build();
+    if (screen === 'teams') teamsScreen(); else if (screen === 'play' && td) renderPlay();
+  });
+  if (localStorage.getItem('cir_auth') !== '1') return loginScreen();
+  if (team) {
+    try {
+      const d = await DB.get('teams/' + team);
+      if (d && d.session === sid) return attach();
+    } catch(e) {}
+    team = null; localStorage.removeItem('cir_team');
+  }
+  teamsScreen();
+}
+
+start();
+</script>
+</body>
+</html>
