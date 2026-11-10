@@ -42,6 +42,7 @@ input,select,textarea{width:100%;padding:13px;border-radius:12px;border:1px soli
 .admin-reply-box{background:#3ddc8422;border:1px solid var(--ok);padding:12px;border-radius:12px;margin:10px 0}
 .santa-link{font-size:24px;text-decoration:none;display:inline-block;cursor:pointer;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.5));transition:transform .2s}
 .santa-link:hover{transform:scale(1.2)}
+@media (prefers-reduced-motion: reduce){.flake{display:none}}
 
 /* ================= ANALÓG HOLVAGY-O-METER ================= */
 .gauge-wrap{width:270px;height:270px;margin:6px auto;position:relative}
@@ -89,6 +90,9 @@ const FINALS = {
   szinezo:{icon: '🎅🖍️', title: 'Mikulás-színező', desc: 'Színezzétek ki a legszebb ünnepi rajzot!'}
 };
 const FINAL_SECONDS = 180;
+const HEAT_MAX_M = 80;          // ennél messzebb a mutató a hideg végén áll (logaritmikus skála)
+const MAX_UNLOCK_ACC = 25;      // ennél gyengébb GPS-jelnél a GPS nem nyit, csak a QR
+const GPS_OPTS = {enableHighAccuracy: true, maximumAge: 1000, timeout: 20000};
 
 const S = (id, name, clue, type, prompt, extra = {}) => ({id, name, clue, type, prompt, hint: '', points: POINTS_PER_STEP, ...extra});
 const DEFAULT_CONTENT = {routes: {
@@ -152,10 +156,11 @@ function build() {
   let content = DEFAULT_CONTENT;
   if (remote.contentJson) { try { const c = JSON.parse(remote.contentJson); if (c && c.routes) content = c; } catch (e) {} }
   cfg = {
-    teams: {...DEFAULT_TEAMS, ...(remote.teams || {})},
+    teams: Object.fromEntries(TEAM_KEYS.map(k => [k, {...DEFAULT_TEAMS[k], ...((remote.teams || {})[k] || {})}])),
     finals: {...DEFAULT_FINALS, ...(remote.finals || {})},
     locs: remote.locs || {},
     gpsEnabled: remote.gpsEnabled !== undefined ? remote.gpsEnabled : true,
+    showDist: remote.showDist !== false,
     content,
     closed: !!remote.closed
   };
@@ -257,7 +262,7 @@ function snow() {
 /* ================= JÁTÉKOS LOGIKA ================= */
 let sid = localStorage.getItem('cir_sid') || (() => { const v = Math.random().toString(36).slice(2) + now().toString(36); localStorage.setItem('cir_sid', v); return v; })();
 let team = localStorage.getItem('cir_team') || null, td = null, unsubTeam = null, screen = '', lastKey = '';
-let pos = null, buf = [], hits = 0, watchId = null, hb = null, tickT = null;
+let pos = null, buf = [], hits = 0, watchId = null, hb = null, tickT = null, hist = [], unlockT = null, gpsErr = '', wakeLock = null;
 
 const fresh = (session, resets = 0) => ({
   step: 0, phase: 'go', points: 0, session, claimedAt: now(), lastSeen: now(), lastActive: now(),
@@ -309,7 +314,7 @@ async function enterTeam(k, btnEl) {
         return;
       }
     }
-    await DB.set('teams/' + k, fresh(sid, d ? (d.resets || 0) + 1 : 0), false);
+    if (!(d && d.session === sid && d.step !== undefined)) await DB.set('teams/' + k, fresh(sid, d ? (d.resets || 0) + 1 : 0), false);
     team = k;
     localStorage.setItem('cir_team', k);
     attach();
@@ -323,7 +328,8 @@ async function enterTeam(k, btnEl) {
 function detach() {
   if (unsubTeam) { unsubTeam(); unsubTeam = null; }
   if (watchId != null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
-  clearInterval(hb); clearInterval(tickT);
+  clearInterval(hb); clearInterval(tickT); clearInterval(unlockT);
+  try { if (wakeLock) wakeLock.release(); } catch (e) {} wakeLock = null;
   td = null; lastKey = '';
 }
 
@@ -333,10 +339,9 @@ function attach() {
     if (!d || d.session !== sid) return kicked(d);
     td = d; renderPlay();
   });
-  if (cfg.gpsEnabled && navigator.geolocation) {
-    watchId = navigator.geolocation.watchPosition(onPos, () => { pos = null; updateMeter(); }, {enableHighAccuracy: true, maximumAge: 1000, timeout: 20000});
-  }
+  syncGps(); keepAwake();
   hb = setInterval(heartbeat, 4000);
+  unlockT = setInterval(checkUnlock, 1000);
 }
 
 function kicked(d) {
@@ -348,18 +353,42 @@ function kicked(d) {
 function curTarget() {
   if (!td || td.phase !== 'go') return null;
   const s = stepsOf(team)[td.step]; if (!s) return null;
-  return {s, L: cfg.locs[locOf(s)]};
+  const L = cfg.locs[locOf(s)];
+  return {s, L: (L && typeof L.lat === 'number' && typeof L.lng === 'number') ? L : null};
 }
 
 function onPos(p) {
+  gpsErr = '';
   buf.push({lat: p.coords.latitude, lng: p.coords.longitude}); if (buf.length > 3) buf.shift();
-  pos = {lat: buf.reduce((a, b) => a + b.lat, 0) / buf.length, lng: buf.reduce((a, b) => a + b.lng, 0) / buf.length, acc: p.coords.accuracy};
-  updateMeter();
+  pos = {lat: buf.reduce((a, b) => a + b.lat, 0) / buf.length, lng: buf.reduce((a, b) => a + b.lng, 0) / buf.length, acc: p.coords.accuracy, ts: now()};
   const t = curTarget();
   if (t && t.L) {
-    const d = hav(pos, t.L);
-    if (d <= (t.L.r || DEFAULT_RADIUS)) { if (++hits >= 2) { hits = 0; unlock(); } } else hits = 0;
+    hist.push({ts: pos.ts, d: hav(pos, t.L)});
+    while (hist.length > 60 || (hist.length && pos.ts - hist[0].ts > 30000)) hist.shift();
   }
+  updateMeter();
+}
+function onPosErr(e) { pos = null; gpsErr = (e && e.code === 1) ? 'denied' : 'nosignal'; updateMeter(); }
+function syncGps() {
+  if (screen !== 'play') return;
+  if (cfg.gpsEnabled && navigator.geolocation && watchId == null) watchId = navigator.geolocation.watchPosition(onPos, onPosErr, GPS_OPTS);
+  else if (!cfg.gpsEnabled && watchId != null) { navigator.geolocation.clearWatch(watchId); watchId = null; pos = null; buf = []; hist = []; }
+  updateMeter();
+}
+async function keepAwake() {
+  try {
+    if ('wakeLock' in navigator && !wakeLock) {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { wakeLock = null; });
+    }
+  } catch (e) {}
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && screen === 'play') keepAwake(); });
+// Másodpercenként ellenőriz, így akkor is nyit, ha a telefon áll és nem érkezik új GPS-esemény.
+function checkUnlock() {
+  const t = curTarget();
+  if (!cfg.gpsEnabled || !t || !t.L || !pos || now() - pos.ts > 120000) { hits = 0; return; }
+  if (hav(pos, t.L) <= (t.L.r || DEFAULT_RADIUS) && pos.acc <= MAX_UNLOCK_ACC) { if (++hits >= 2) { hits = 0; unlock(); } } else hits = 0;
 }
 
 function unlock() { if (td && td.phase === 'go') DB.set('teams/' + team, {phase: 'task', lastActive: now()}); }
@@ -374,49 +403,44 @@ function heartbeat() {
 /* ================= ANALÓG GAUGE ================= */
 function getHeatFactor(dist, r) {
   if (dist <= r) return 1.0;
-  if (dist <= r * 2) return 0.88;
-  if (dist <= 15) return 0.72;
-  if (dist <= 30) return 0.50;
-  if (dist <= 60) return 0.30;
-  if (dist <= 120) return 0.15;
-  return 0.04;
+  const f = 1 - Math.log(dist / r) / Math.log(HEAT_MAX_M / r);   // folyamatos, logaritmikus skála
+  return Math.max(0.03, Math.min(0.99, f));
 }
 
 function updateMeter() {
-  const needle = $('#mainNeedle'), subNeedle = $('#subNeedle'), txt = $('#gaugeTxt'), distBadge = $('#distBadge'), gpsAcc = $('#gpsAcc');
+  const needle = $('#mainNeedle'), subNeedle = $('#subNeedle'), txt = $('#gaugeTxt'), distBadge = $('#distBadge'), gpsAcc = $('#gpsAcc'), trendEl = $('#trend');
   if (!needle || !txt) return;
+  const rest = (msg, badge, color) => {
+    needle.style.transform = 'rotate(-115deg)';
+    if (subNeedle) subNeedle.style.transform = 'rotate(0deg)';
+    txt.textContent = msg; txt.style.color = color || 'var(--mut)';
+    if (distBadge) { distBadge.style.display = ''; distBadge.textContent = badge || ''; }
+    if (trendEl) trendEl.textContent = '';
+    if (gpsAcc) gpsAcc.textContent = '';
+  };
   const t = curTarget();
-  if (!t || !t.L) {
-    needle.style.transform = 'rotate(-115deg)';
-    txt.textContent = '📍 Helyszín-QR keresése szükséges';
-    txt.style.color = 'var(--mut)';
-    if (distBadge) distBadge.textContent = 'Használjátok a QR-kódot!';
-    return;
-  }
-  if (!pos) {
-    needle.style.transform = 'rotate(-115deg)';
-    txt.textContent = '📡 GPS jel keresése…';
-    txt.style.color = 'var(--mut)';
-    if (distBadge) distBadge.textContent = 'Menj szabadabb térbe!';
-    return;
-  }
-  const d = hav(pos, t.L);
-  const factor = getHeatFactor(d, t.L.r || DEFAULT_RADIUS);
-  const angle = -115 + factor * 230;
-  needle.style.transform = `rotate(${angle}deg)`;
+  if (!cfg.gpsEnabled) return rest('🧭 A műszer most ki van kapcsolva', 'A helyszín-QR nyitja meg a feladatot!');
+  if (!t || !t.L) return rest('📍 Helyszín-QR keresése szükséges', 'Használjátok a QR-kódot!');
+  if (gpsErr === 'denied') return rest('🚫 A helymeghatározás le van tiltva', 'Engedélyezd a böngésző beállításaiban, vagy használd a QR-t!', 'var(--bad)');
+  if (!pos) return rest(gpsErr ? '📡 Nincs GPS-jel' : '📡 GPS jel keresése…', gpsErr ? 'Menj ablak közelébe vagy szabadabb térbe!' : 'Menj szabadabb térbe!');
 
-  if (subNeedle) {
-    const subAngle = Math.max(-60, Math.min(60, 60 - (d / 80) * 120));
-    subNeedle.style.transform = `rotate(${subAngle}deg)`;
+  const r = t.L.r || DEFAULT_RADIUS, d = hav(pos, t.L), f = getHeatFactor(d, r);
+  needle.style.transform = `rotate(${-115 + f * 230}deg)`;
+  // kis mutató: közel = bal (piros) vég, távol = jobb (kék) vég
+  if (subNeedle) subNeedle.style.transform = `rotate(${-60 + Math.min(d, 80) / 80 * 120}deg)`;
+  if (distBadge) { distBadge.style.display = cfg.showDist ? '' : 'none'; distBadge.textContent = `📍 Távolság: kb. ${Math.round(d)} méter`; }
+  if (gpsAcc) gpsAcc.textContent = `(GPS pontosság: ±${Math.round(pos.acc)} m)` + (pos.acc > MAX_UNLOCK_ACC ? ' – gyenge jel, használjátok a QR-t!' : '');
+  if (trendEl) {
+    const old = [...hist].reverse().find(x => x.ts <= pos.ts - 5000);
+    const diff = old ? d - old.d : 0;
+    trendEl.textContent = !old ? '' : diff < -2.5 ? '🔺 Melegszik!' : diff > 2.5 ? '🔻 Hűl…' : '▪️ Egy helyben vagytok';
   }
-  if (distBadge) distBadge.textContent = `📍 Távolság: kb. ${Math.round(d)} méter`;
-  if (gpsAcc) gpsAcc.textContent = `(GPS pontosság: ±${Math.round(pos.acc)} m)`;
-
-  if (factor >= 0.95) { txt.textContent = '🔥 FORRÓ! ITT VAGYTOK!'; txt.style.color = 'var(--bad)'; }
-  else if (factor >= 0.70) { txt.textContent = '🌶️ FORRÓ! Nagyon közel!'; txt.style.color = 'var(--warn)'; }
-  else if (factor >= 0.45) { txt.textContent = '🙂 MELEG! Jó irányban jártok!'; txt.style.color = 'var(--gold)'; }
-  else if (factor >= 0.25) { txt.textContent = '😐 LANGYOS…'; txt.style.color = '#74c0fc'; }
-  else { txt.textContent = '🥶 HIDEG… távolodtok!'; txt.style.color = '#a5d8ff'; }
+  // a küszöbök a számlap íveihez igazodnak (kék / zöld / piros)
+  if (f >= 0.92) { txt.textContent = '🔥 ITT VAGYTOK!'; txt.style.color = 'var(--bad)'; }
+  else if (f >= 0.64) { txt.textContent = '🌶️ FORRÓ! Nagyon közel!'; txt.style.color = 'var(--warn)'; }
+  else if (f >= 0.41) { txt.textContent = '🙂 MELEG!'; txt.style.color = 'var(--gold)'; }
+  else if (f >= 0.25) { txt.textContent = '😐 LANGYOS…'; txt.style.color = '#74c0fc'; }
+  else { txt.textContent = '🥶 HIDEG…'; txt.style.color = '#a5d8ff'; }
 }
 
 function shell() {
@@ -432,7 +456,7 @@ function shell() {
 }
 
 function renderPlay() {
-  if (cfg.closed) { detach(); app().innerHTML = '<div class="card center"><h1>🎄</h1><h2>A küldetés lezárult!</h2><p class="small">Gyertek a közös terembe!</p></div>'; return; }
+  if (cfg.closed) { app().innerHTML = '<div class="card center"><h1>🎄</h1><h2>A küldetés lezárult!</h2><p class="small">Gyertek a közös terembe!</p></div>'; return; }
   if (!$('#body')) { shell(); lastKey = ''; }
   const st = stepsOf(team), t = cfg.teams[team], total = st.length + 1;
   const done = td.phase === 'done' ? total : Math.min(td.step, st.length);
@@ -441,7 +465,7 @@ function renderPlay() {
   $('#tprog').style.width = Math.round(done / total * 100) + '%';
 
   const key = [team, td.step, td.phase, td.finalStart || 0, td.finalUnlocked, (td.hintsUsed || []).join(','), td.sosActive, td.sosReply || ''].join('|');
-  if (key === lastKey) return; lastKey = key; hits = 0; clearInterval(tickT);
+  if (key === lastKey) return; lastKey = key; hits = 0; hist = []; clearInterval(tickT);
   const b = $('#body');
 
   if (td.phase === 'done') {
@@ -482,6 +506,7 @@ function renderPlay() {
       ${clueDesc}
 
       <!-- TISZTA, NAGY FELIRATÚ ANALÓG HOLVAGY-O-METER -->
+      <div class="center eyebrow" style="letter-spacing:.2em;margin-top:6px">HOLVAGY-O-METER</div>
       <div class="gauge-wrap">
         <svg class="gauge-svg" viewBox="0 0 270 270">
           <defs>
@@ -507,12 +532,10 @@ function renderPlay() {
           <path d="M 102 50 A 90 90 0 0 1 168 50" fill="none" stroke="#00e676" stroke-width="14" stroke-linecap="round"/>
           <path d="M 182 60 A 90 90 0 0 1 225 135" fill="none" stroke="#ff1744" stroke-width="14" stroke-linecap="round"/>
 
-          <!-- Nagy, kontrasztos, tiszta magyar feliratok -->
-          <text x="56" y="112" font-size="14" font-weight="900" fill="#1565c0" transform="rotate(-48 56 112)">HIDEG</text>
-          <text x="135" y="42" font-size="15" font-weight="900" fill="#2e7d32" text-anchor="middle">MELEG</text>
-          <text x="214" y="112" font-size="14" font-weight="900" fill="#c62828" transform="rotate(48 214 112)" text-anchor="end">FORRÓ</text>
-
-          <text x="135" y="85" font-size="13" font-weight="900" fill="#37474f" text-anchor="middle" letter-spacing="1.5">HOLVAGY-O-METER</text>
+          <!-- Feliratok az ívek belső oldalán -->
+          <text x="77.3" y="103" font-size="13" font-weight="900" fill="#1565c0" text-anchor="middle" transform="rotate(-61 77.3 103)">HIDEG</text>
+          <text x="135" y="74" font-size="14" font-weight="900" fill="#2e7d32" text-anchor="middle">MELEG</text>
+          <text x="192.7" y="103" font-size="13" font-weight="900" fill="#c62828" text-anchor="middle" transform="rotate(61 192.7 103)">FORRÓ</text>
 
           <!-- Alsó méter segédskála -->
           <path d="M 95 200 A 40 40 0 0 1 175 200" fill="none" stroke="#b0bec5" stroke-width="6"/>
@@ -539,6 +562,7 @@ function renderPlay() {
       </div>
 
       <div class="gauge-reading" id="gaugeTxt">📡 Célpont keresése…</div>
+      <div class="small center" id="trend" style="min-height:1.4em;font-weight:700"></div>
       <div class="center" style="margin-bottom:8px">
         <span class="dist-badge" id="distBadge">GPS pozicionálás folyamatban…</span>
       </div>
@@ -696,6 +720,7 @@ async function submit(s, type, data, answer) {
     phase: n >= stepsOf(team).length ? 'final' : 'go',
     points: (td.points || 0) + earned,
     sosReply: '',
+    sosActive: false,
     lastActive: now()
   });
   toast(`🎉 Feladat teljesítve! (+${earned} ⭐)`);
@@ -782,13 +807,14 @@ async function start() {
   DB.watch('config/main', r => {
     remote = r || {}; build();
     if (screen === 'teams') teamsScreen(); else if (screen === 'play' && td) renderPlay();
+    if (screen === 'play') syncGps();
   });
   if (localStorage.getItem('cir_auth') !== '1') return loginScreen();
   if (team) {
     try {
       const d = await DB.get('teams/' + team);
       if (d && d.session === sid) return attach();
-    } catch(e) {}
+    } catch (e) { return attach(); }   // nincs kapcsolat: a figyelő majd eldönti, mi a helyzet
     team = null; localStorage.removeItem('cir_team');
   }
   teamsScreen();
